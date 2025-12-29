@@ -1,0 +1,64 @@
+
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup
+spec:
+  description: Remove temporary artifacts, caches, and Python bytecode
+  steps:
+    - name: cleanup-workspace
+      image: alpine:3.19
+      script: |
+        #!/bin/sh
+        set -e
+        echo "[cleanup] removing temp and cache directories..."
+        rm -rf /workspace/tmp || true
+        rm -rf /workspace/.cache || true
+        rm -rf /workspace/.pytest_cache || true
+        find /workspace -name "__pycache__" -type d -prune -exec rm -rf {} +
+        rm -rf /workspace/build /workspace/dist || true
+        echo "[cleanup] done."
+
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: test-python-nose
+spec:
+  description: Lint with flake8 and run nose unit tests with coverage for the 'service' package
+  workspaces:
+    - name: source
+  params:
+    - name: python-version
+      default: "3.9"
+    - name: code-dir
+      default: "service"
+    - name: tests-dir
+      default: "tests"
+  steps:
+    - name: setup-python
+      image: python:$(params.python-version)-slim
+      workingDir: /workspace/source
+      script: |
+        #!/bin/bash
+        set -e
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install flake8 nose coverage
+
+    - name: lint
+      image: python:$(params.python-version)-slim
+      workingDir: /workspace/source
+      script: |
+        #!/bin/bash
+        set -e
+        flake8 $(params.code-dir) --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 $(params.code-dir) --count --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: unit-tests
+      image: python:$(params.python-version)-slim
+      workingDir: /workspace/source
+      script: |
+        #!/bin/bash
+        set -e
+        nosetests -v --with-coverage --cover-package=$(params.code-dir) $(params.tests-dir)
